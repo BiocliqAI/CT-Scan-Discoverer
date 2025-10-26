@@ -1,7 +1,7 @@
 import React, { useState, useRef, useCallback } from 'react';
 import { CityData } from '../types';
 import { findAndAnalyzeCTScans } from '../services/geminiService';
-import { CheckCircleIcon, ChevronDownIcon, ChevronUpIcon, DoctorIcon, LocationIcon, PhoneIcon, StopIcon } from './Icons';
+import { CheckCircleIcon, ChevronDownIcon, ChevronUpIcon, DoctorIcon, LocationIcon, PhoneIcon, StopIcon, MapLinkIcon, ReasoningIcon } from './Icons';
 
 interface CityTileProps {
   initialCityData: CityData;
@@ -34,19 +34,33 @@ const CityTile: React.FC<CityTileProps> = ({ initialCityData }) => {
         pincodes: prev.pincodes.map((p, idx) => idx === i ? { ...p, status: 'scanning' } : p),
       }));
 
-      const newCenters = await findAndAnalyzeCTScans(currentPincode.code);
-      
-      if (isCancelled.current) {
-        setCity(prev => ({ ...prev, status: 'stopped' }));
-        return;
+      try {
+        const newCenters = await findAndAnalyzeCTScans(currentPincode.code);
+        
+        if (isCancelled.current) {
+          setCity(prev => ({ ...prev, status: 'stopped' }));
+          return;
+        }
+        
+        setCity(prev => ({
+          ...prev,
+          results: [...prev.results, ...newCenters],
+          centersFound: prev.centersFound + newCenters.length,
+          pincodes: prev.pincodes.map((p, idx) => idx === i ? { ...p, status: 'scanned' } : p),
+        }));
+
+      } catch(err) {
+         if (isCancelled.current) {
+            setCity(prev => ({ ...prev, status: 'stopped' }));
+            return;
+         }
+         console.error(`Error processing pincode ${currentPincode.code}:`, err);
+         setCity(prev => ({
+             ...prev,
+             pincodes: prev.pincodes.map((p, idx) => idx === i ? { ...p, status: 'error' } : p),
+             error: `Failed on pincode ${currentPincode.code}.`,
+         }));
       }
-      
-      setCity(prev => ({
-        ...prev,
-        results: [...prev.results, ...newCenters],
-        centersFound: prev.centersFound + newCenters.length,
-        pincodes: prev.pincodes.map((p, idx) => idx === i ? { ...p, status: 'scanned' } : p),
-      }));
     }
     
     if (!isCancelled.current) {
@@ -125,7 +139,12 @@ const CityTile: React.FC<CityTileProps> = ({ initialCityData }) => {
                     <div className="mt-4 space-y-4 max-h-80 overflow-y-auto pr-2 animate-fade-in">
                       {results.map((center, index) => (
                         <div key={index} className="bg-gray-700 p-4 rounded-lg">
-                          <h4 className="font-bold text-cyan-400">{center.centerName}</h4>
+                          <div className="flex justify-between items-start gap-2">
+                              <h4 className="font-bold text-cyan-400 text-lg">{center.centerName}</h4>
+                              <a href={center.googleMapsLink} target="_blank" rel="noopener noreferrer" className="flex-shrink-0 inline-flex items-center gap-1 bg-blue-500 hover:bg-blue-600 text-white text-xs font-bold py-1 px-2 rounded-md transition-colors">
+                                  Map <MapLinkIcon />
+                              </a>
+                          </div>
                           <p className="flex items-start gap-2 mt-2 text-sm text-gray-300"><LocationIcon />{center.address}</p>
                           <p className="flex items-center gap-2 mt-1 text-sm text-gray-300"><PhoneIcon />{center.contactDetails || 'Not available'}</p>
                           {center.doctorDetails && center.doctorDetails.length > 0 && (
@@ -136,6 +155,12 @@ const CityTile: React.FC<CityTileProps> = ({ initialCityData }) => {
                                  </ul>
                               </div>
                           )}
+                           <div className="mt-3 pt-3 border-t border-gray-600">
+                                <p className="flex items-start gap-2 text-sm text-gray-400">
+                                    <ReasoningIcon />
+                                    <span className="italic">"{center.reasoning}"</span>
+                                </p>
+                            </div>
                         </div>
                       ))}
                     </div>

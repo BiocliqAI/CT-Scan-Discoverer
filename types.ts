@@ -3,6 +3,8 @@ export interface ScanCenter {
   address: string;
   contactDetails: string;
   doctorDetails: string[];
+  googleMapsLink: string;
+  reasoning: string;
 }
 
 export type PincodeStatus = 'pending' | 'scanning' | 'scanned' | 'error';

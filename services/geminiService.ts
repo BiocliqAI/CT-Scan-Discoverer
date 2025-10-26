@@ -31,41 +31,89 @@ const responseSchema = {
             type: Type.STRING,
           }
         },
+        googleMapsLink: {
+          type: Type.STRING,
+          description: "A Google Maps search URL generated from the center's name and address. e.g., 'https://www.google.com/maps/search/?api=1&query=Center+Name+Address'",
+        },
+        reasoning: {
+            type: Type.STRING,
+            description: "A brief, one-sentence summary explaining the evidence found in the text that confirms the presence of a CT scanner.",
+        }
       },
-      required: ["centerName", "address", "contactDetails"],
+      required: ["centerName", "address", "contactDetails", "googleMapsLink", "reasoning"],
     },
 };
 
 export const findAndAnalyzeCTScans = async (pincode: string): Promise<ScanCenter[]> => {
   try {
-    const prompt = `
-        Find all diagnostic centers, imaging centers, or hospitals in the area of pincode ${pincode}, India that offer CT Scan services.
-        Analyze the search results, including names, descriptions, reviews, and website contents, to definitively confirm the presence of a CT (Computed Tomography) scanner.
-        For each center you are highly confident has a CT scanner, provide its name, full address, phone number, and a list of any associated doctor names you can find.
-        If no centers with confirmed CT scanners are found, return an empty array.
+    // Step 1: Use grounding to find information about potential centers.
+    const groundingPrompt = `
+      Find diagnostic centers, imaging centers, or hospitals near pincode ${pincode}, India, that have a CT scanner. 
+      For each one, gather detailed information from Google Search and Maps regarding the services they offer, paying close attention to any mention of "CT Scan", "Computed Tomography", or related imaging services. 
+      Also, collect their name, address, and contact details.
     `;
 
-    const response = await ai.models.generateContent({
+    const groundedResponse = await ai.models.generateContent({
       model: "gemini-2.5-pro",
-      contents: prompt,
+      contents: groundingPrompt,
       config: {
         tools: [{ googleSearch: {} }, { googleMaps: {} }],
-        responseMimeType: "application/json",
-        responseSchema: responseSchema,
       },
     });
 
-    const jsonText = response.text.trim();
+    const groundedText = groundedResponse.text.trim();
+    if (!groundedText) {
+      console.log(`No initial information found for pincode ${pincode}.`);
+      return [];
+    }
+
+    // Step 2: Analyze the grounded text and extract confirmed CT scan centers into a structured JSON format.
+    const extractionPrompt = `
+      Analyze the following text which contains information about diagnostic centers. Based ONLY on this text, identify and extract details for centers that are definitively confirmed to have a CT (Computed Tomography) scanner.
+      
+      For each confirmed center, provide the following details:
+      1.  **centerName**: The full name of the center.
+      2.  **address**: The complete address.
+      3.  **contactDetails**: The primary phone number.
+      4.  **doctorDetails**: A list of any doctor names mentioned.
+      5.  **googleMapsLink**: A Google Maps search URL for the center's name and address (e.g., "https://www.google.com/maps/search/?api=1&query=Center+Name+Address").
+      6.  **reasoning**: A concise, one-sentence summary explaining the evidence from the text that indicates a CT scanner is available (e.g., "The center's website explicitly lists 'CT Scan' as a provided service.").
+
+      If the text does not contain enough information to confirm a CT scanner at any location, or if no centers are mentioned, return an empty array.
+
+      Text to analyze:
+      ---
+      ${groundedText}
+      ---
+    `;
+
+    const extractionResponse = await ai.models.generateContent({
+        model: "gemini-2.5-pro",
+        contents: extractionPrompt,
+        config: {
+            responseMimeType: "application/json",
+            responseSchema: responseSchema,
+        },
+    });
+
+    const jsonText = extractionResponse.text.trim();
     if (!jsonText) {
         return [];
     }
-
-    const parsedResponse = JSON.parse(jsonText);
-    return parsedResponse as ScanCenter[];
+    
+    // Safely parse the JSON
+    try {
+        const parsedResponse = JSON.parse(jsonText);
+        return parsedResponse as ScanCenter[];
+    } catch (parseError) {
+        console.error(`Error parsing JSON response for pincode ${pincode}:`, parseError, "JSON Text:", jsonText);
+        return [];
+    }
 
   } catch (error) {
-    console.error(`Error discovering scans in pincode ${pincode}:`, error);
-    // Return empty array on error to allow process to continue
-    return [];
+    const errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+    console.error(`Error discovering scans in pincode ${pincode}:`, errorMessage);
+    // Rethrow to be caught in the component
+    throw new Error(errorMessage);
   }
 };
