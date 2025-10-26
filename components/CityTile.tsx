@@ -1,7 +1,7 @@
 import React, { useState, useRef, useCallback } from 'react';
-import { CityData } from '../types';
+import { CityData, ScanCenter } from '../types';
 import { findAndAnalyzeCTScans } from '../services/geminiService';
-import { CheckCircleIcon, ChevronDownIcon, ChevronUpIcon, DoctorIcon, LocationIcon, PhoneIcon, StopIcon, MapLinkIcon, ReasoningIcon } from './Icons';
+import { CheckCircleIcon, ChevronDownIcon, ChevronUpIcon, DoctorIcon, LocationIcon, PhoneIcon, StopIcon, MapLinkIcon, ReasoningIcon, DownloadIcon } from './Icons';
 
 interface CityTileProps {
   initialCityData: CityData;
@@ -12,6 +12,7 @@ const CityTile: React.FC<CityTileProps> = ({ initialCityData }) => {
   const [isExpanded, setIsExpanded] = useState(true);
   const [isResultsVisible, setIsResultsVisible] = useState(false);
   const isCancelled = useRef(false);
+  const discoveredFingerprints = useRef(new Set<string>());
 
   const { name, pincodes, status, currentPincodeIndex, centersFound, results, error, population } = city;
   const totalPincodes = pincodes.length;
@@ -19,6 +20,7 @@ const CityTile: React.FC<CityTileProps> = ({ initialCityData }) => {
   
   const runDiscovery = useCallback(async () => {
     isCancelled.current = false;
+    discoveredFingerprints.current.clear(); // Clear fingerprints for a new run
     setCity(prev => ({ ...prev, status: 'running', currentPincodeIndex: 0, centersFound: 0, results: [], error: undefined }));
 
     for (let i = 0; i < totalPincodes; i++) {
@@ -35,18 +37,34 @@ const CityTile: React.FC<CityTileProps> = ({ initialCityData }) => {
       }));
 
       try {
-        const newCenters = await findAndAnalyzeCTScans(currentPincode.code);
+        const centers = await findAndAnalyzeCTScans(currentPincode.code);
         
         if (isCancelled.current) {
           setCity(prev => ({ ...prev, status: 'stopped' }));
           return;
         }
+
+        const uniqueNewCenters: ScanCenter[] = [];
+        for (const center of centers) {
+          // Normalize name and address to create a fingerprint
+          const fingerprint = `${center.centerName.toLowerCase().replace(/[^a-z0-9]/g, '')}${center.address.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+          if (!discoveredFingerprints.current.has(fingerprint)) {
+            discoveredFingerprints.current.add(fingerprint);
+            uniqueNewCenters.push(center);
+          }
+        }
         
+        if(uniqueNewCenters.length > 0) {
+          setCity(prev => ({
+            ...prev,
+            results: [...prev.results, ...uniqueNewCenters],
+            centersFound: prev.centersFound + uniqueNewCenters.length,
+          }));
+        }
+
         setCity(prev => ({
-          ...prev,
-          results: [...prev.results, ...newCenters],
-          centersFound: prev.centersFound + newCenters.length,
-          pincodes: prev.pincodes.map((p, idx) => idx === i ? { ...p, status: 'scanned' } : p),
+            ...prev,
+            pincodes: prev.pincodes.map((p, idx) => idx === i ? { ...p, status: 'scanned' } : p),
         }));
 
       } catch(err) {
@@ -70,6 +88,45 @@ const CityTile: React.FC<CityTileProps> = ({ initialCityData }) => {
 
   const handleStop = () => {
     isCancelled.current = true;
+  };
+
+  const handleDownload = () => {
+    if (results.length === 0) return;
+
+    const headers = [
+      'Center Name',
+      'Address',
+      'Contact Details',
+      'Doctor Details',
+      'Google Maps Link',
+      'Reasoning'
+    ];
+
+    const escapeCsvField = (field: string) => {
+      // Wrap in quotes and escape internal quotes
+      return `"${String(field).replace(/"/g, '""')}"`;
+    };
+
+    const rows = results.map(center => [
+      escapeCsvField(center.centerName),
+      escapeCsvField(center.address),
+      escapeCsvField(center.contactDetails || ''),
+      escapeCsvField(center.doctorDetails?.join('; ') || ''),
+      escapeCsvField(center.googleMapsLink),
+      escapeCsvField(center.reasoning)
+    ].join(','));
+
+    const csvContent = [headers.join(','), ...rows].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    
+    link.setAttribute('href', url);
+    link.setAttribute('download', `CT_Scan_Results_${name.replace(/\s+/g, '_')}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   const getStatusInfo = () => {
@@ -131,10 +188,20 @@ const CityTile: React.FC<CityTileProps> = ({ initialCityData }) => {
 
             {results.length > 0 && (
                 <div className="mt-4 border-t border-gray-700 pt-4">
-                  <button onClick={() => setIsResultsVisible(!isResultsVisible)} className="w-full flex justify-between items-center text-left text-lg font-semibold text-gray-200 hover:text-white">
-                    <span>View {results.length} Found Centers</span>
-                    {isResultsVisible ? <ChevronUpIcon /> : <ChevronDownIcon />}
-                  </button>
+                  <div className="flex justify-between items-center">
+                    <button onClick={() => setIsResultsVisible(!isResultsVisible)} className="flex-grow flex justify-between items-center text-left text-lg font-semibold text-gray-200 hover:text-white">
+                      <span>View {results.length} Found Centers</span>
+                      {isResultsVisible ? <ChevronUpIcon /> : <ChevronDownIcon />}
+                    </button>
+                    <button 
+                      onClick={handleDownload}
+                      className="ml-4 flex-shrink-0 inline-flex items-center gap-2 bg-gray-600 hover:bg-gray-500 text-white text-sm font-bold py-2 px-3 rounded-lg transition-colors"
+                      title="Download Results as CSV"
+                    >
+                        <DownloadIcon />
+                        Download
+                    </button>
+                  </div>
                   {isResultsVisible && (
                     <div className="mt-4 space-y-4 max-h-80 overflow-y-auto pr-2 animate-fade-in">
                       {results.map((center, index) => (
