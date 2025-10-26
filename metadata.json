@@ -1,0 +1,5 @@
+{
+  "name": "CT Scan Discoverer",
+  "description": "An application to discover CT scan centers in Indian cities by scanning pincodes from an uploaded CSV file, using Google Maps and Google Search grounding with Gemini analysis.",
+  "requestFramePermissions": []
+}
