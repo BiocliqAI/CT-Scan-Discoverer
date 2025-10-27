@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { CityData, ScanCenter } from '../types';
 import { findAndAnalyzeCTScans } from '../services/geminiService';
 import { CheckCircleIcon, ChevronDownIcon, ChevronUpIcon, DoctorIcon, LocationIcon, PhoneIcon, StopIcon, MapLinkIcon, ReasoningIcon, DownloadIcon } from './Icons';
@@ -12,15 +12,36 @@ const CityTile: React.FC<CityTileProps> = ({ initialCityData }) => {
   const [isExpanded, setIsExpanded] = useState(true);
   const [isResultsVisible, setIsResultsVisible] = useState(false);
   const isCancelled = useRef(false);
-  const discoveredFingerprints = useRef(new Set<string>());
 
   const { name, pincodes, status, currentPincodeIndex, centersFound, results, error, population } = city;
   const totalPincodes = pincodes.length;
   const progress = totalPincodes > 0 ? (currentPincodeIndex / totalPincodes) * 100 : 0;
+
+  useEffect(() => {
+    if (status === 'completed' && results.length > 0) {
+        const uniqueFingerprints = new Set<string>();
+        const uniqueResults: ScanCenter[] = [];
+        
+        results.forEach(center => {
+            const fingerprint = `${center.centerName.toLowerCase().replace(/[^a-z0-9]/g, '')}${center.address.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+            if (!uniqueFingerprints.has(fingerprint)) {
+                uniqueFingerprints.add(fingerprint);
+                uniqueResults.push(center);
+            }
+        });
+
+        if (uniqueResults.length < results.length) {
+            setCity(prev => ({
+                ...prev,
+                results: uniqueResults,
+                centersFound: uniqueResults.length,
+            }));
+        }
+    }
+  }, [status]); // Only depend on status change to 'completed'
   
   const runDiscovery = useCallback(async () => {
     isCancelled.current = false;
-    discoveredFingerprints.current.clear(); // Clear fingerprints for a new run
     setCity(prev => ({ ...prev, status: 'running', currentPincodeIndex: 0, centersFound: 0, results: [], error: undefined }));
 
     for (let i = 0; i < totalPincodes; i++) {
@@ -44,21 +65,11 @@ const CityTile: React.FC<CityTileProps> = ({ initialCityData }) => {
           return;
         }
 
-        const uniqueNewCenters: ScanCenter[] = [];
-        for (const center of centers) {
-          // Normalize name and address to create a fingerprint
-          const fingerprint = `${center.centerName.toLowerCase().replace(/[^a-z0-9]/g, '')}${center.address.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
-          if (!discoveredFingerprints.current.has(fingerprint)) {
-            discoveredFingerprints.current.add(fingerprint);
-            uniqueNewCenters.push(center);
-          }
-        }
-        
-        if(uniqueNewCenters.length > 0) {
+        if(centers.length > 0) {
           setCity(prev => ({
             ...prev,
-            results: [...prev.results, ...uniqueNewCenters],
-            centersFound: prev.centersFound + uniqueNewCenters.length,
+            results: [...prev.results, ...centers],
+            centersFound: prev.centersFound + centers.length,
           }));
         }
 
@@ -205,7 +216,7 @@ const CityTile: React.FC<CityTileProps> = ({ initialCityData }) => {
                   {isResultsVisible && (
                     <div className="mt-4 space-y-4 max-h-80 overflow-y-auto pr-2 animate-fade-in">
                       {results.map((center, index) => (
-                        <div key={index} className="bg-gray-700 p-4 rounded-lg">
+                        <div key={`${center.centerName}-${index}`} className="bg-gray-700 p-4 rounded-lg">
                           <div className="flex justify-between items-start gap-2">
                               <h4 className="font-bold text-cyan-400 text-lg">{center.centerName}</h4>
                               <a href={center.googleMapsLink} target="_blank" rel="noopener noreferrer" className="flex-shrink-0 inline-flex items-center gap-1 bg-blue-500 hover:bg-blue-600 text-white text-xs font-bold py-1 px-2 rounded-md transition-colors">

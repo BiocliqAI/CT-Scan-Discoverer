@@ -18,7 +18,10 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileProcessed }) => {
       const text = await file.text();
       const citiesData = parseCSV(text);
       if (citiesData.length === 0) {
-        setError("Could not parse file. Required columns: 'pincode', 'district', 'population'.");
+        // The error is set inside parseCSV if headers are wrong
+        if (!error) {
+            setError("No valid city data found in the file.");
+        }
         return;
       }
       
@@ -48,29 +51,32 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileProcessed }) => {
     const pincodeIndex = header.indexOf('pincode');
     const districtIndex = header.indexOf('district');
     const populationIndex = header.indexOf('population');
+    const stateIndex = header.indexOf('statename');
 
-    if (pincodeIndex === -1 || districtIndex === -1 || populationIndex === -1) {
-      console.error("CSV header is missing one of 'pincode', 'district', 'population'");
+    if (pincodeIndex === -1 || districtIndex === -1 || populationIndex === -1 || stateIndex === -1) {
+      console.error("CSV header is missing one of 'pincode', 'district', 'statename', 'population'");
+      setError("Could not parse file. Required columns: 'Pincode', 'District', 'StateName', 'Population'.");
       return [];
     }
 
-    const cityMap = new Map<string, { population: number; pincodes: Set<string> }>();
+    const cityMap = new Map<string, { population: number; pincodes: Set<string>; stateName: string }>();
 
     for (let i = 1; i < lines.length; i++) {
         const parts = lines[i].split(',').map(item => item.trim());
-        if (parts.length <= Math.max(pincodeIndex, districtIndex, populationIndex)) continue;
+        if (parts.length <= Math.max(pincodeIndex, districtIndex, populationIndex, stateIndex)) continue;
 
         const pincode = parts[pincodeIndex];
         const district = parts[districtIndex];
         const populationStr = parts[populationIndex];
+        const stateName = parts[stateIndex];
 
-        if (!pincode || !district || !populationStr) continue;
+        if (!pincode || !district || !populationStr || !stateName) continue;
 
         const population = parseInt(populationStr.replace(/,/g, ''), 10);
         if (isNaN(population)) continue;
 
         if (!cityMap.has(district)) {
-            cityMap.set(district, { population: population, pincodes: new Set() });
+            cityMap.set(district, { population, pincodes: new Set(), stateName });
         }
         
         const cityInfo = cityMap.get(district)!;
@@ -82,6 +88,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileProcessed }) => {
         if (data.pincodes.size > 0) {
             citiesData.push({
                 name,
+                stateName: data.stateName,
                 population: data.population,
                 pincodes: Array.from(data.pincodes).map(p => ({ code: p, status: 'pending' })),
                 status: 'idle',
@@ -116,7 +123,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileProcessed }) => {
           <div className="flex flex-col items-center justify-center pt-5 pb-6">
             <UploadIcon />
             <p className="mb-2 text-sm text-gray-400"><span className="font-semibold text-cyan-400">Click to upload</span> or drag and drop</p>
-            <p className="text-xs text-gray-500">CSV with columns: pincode, district, state, population</p>
+            <p className="text-xs text-gray-500">CSV with columns: Pincode, District, StateName, Population</p>
           </div>
           <input id="dropzone-file" type="file" className="hidden" accept=".csv" onChange={handleFileChange} disabled={isDisabled} />
         </label>

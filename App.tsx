@@ -1,15 +1,26 @@
 import React, { useState } from 'react';
 import { CityData } from './types';
 import FileUpload from './components/FileUpload';
-import CityTile from './components/CityTile';
 import { GithubIcon } from './components/Icons';
+import StateGroup from './components/StateGroup';
 
 const App: React.FC = () => {
-  const [cities, setCities] = useState<CityData[]>([]);
+  const [groupedCities, setGroupedCities] = useState<Record<string, CityData[]>>({});
 
   const handleFileProcessed = (data: CityData[]) => {
-    setCities(data);
+    const grouped = data.reduce((acc, city) => {
+      const { stateName } = city;
+      if (!acc[stateName]) {
+        acc[stateName] = [];
+      }
+      acc[stateName].push(city);
+      return acc;
+    }, {} as Record<string, CityData[]>);
+    
+    setGroupedCities(grouped);
   };
+
+  const hasData = Object.keys(groupedCities).length > 0;
 
   return (
     <div className="min-h-screen bg-gray-900 text-gray-100 font-sans">
@@ -24,18 +35,22 @@ const App: React.FC = () => {
         </header>
 
         <main>
-          {cities.length === 0 ? (
+          {!hasData ? (
             <FileUpload onFileProcessed={handleFileProcessed} />
           ) : (
             <div>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-fade-in">
-                {cities.map((city) => (
-                  <CityTile key={city.name} initialCityData={city} />
+              <div className="space-y-6 animate-fade-in">
+                {Object.keys(groupedCities).sort().map((stateName) => (
+                  <StateGroup 
+                    key={stateName} 
+                    stateName={stateName} 
+                    cities={groupedCities[stateName]} 
+                  />
                 ))}
               </div>
                <div className="text-center mt-8">
                 <button
-                    onClick={() => setCities([])}
+                    onClick={() => setGroupedCities({})}
                     className="bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2 px-4 rounded-lg transition-colors duration-300"
                 >
                     Upload New File

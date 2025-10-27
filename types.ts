@@ -18,6 +18,7 @@ export type CityDiscoveryStatus = 'idle' | 'running' | 'stopped' | 'completed' |
 
 export interface CityData {
   name: string;
+  stateName: string;
   pincodes: Pincode[];
   status: CityDiscoveryStatus;
   results: ScanCenter[];
