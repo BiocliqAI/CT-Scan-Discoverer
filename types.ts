@@ -7,7 +7,7 @@ export interface ScanCenter {
   reasoning: string;
 }
 
-export type PincodeStatus = 'pending' | 'scanning' | 'scanned' | 'error';
+export type PincodeStatus = 'pending' | 'scanning' | 'scanned' | 'error' | 'retrying';
 
 export interface Pincode {
   code: string;

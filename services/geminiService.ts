@@ -7,6 +7,95 @@ if (!process.env.API_KEY) {
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
+export type GeminiCallStage = 'grounding' | 'extraction';
+
+export interface GeminiCallTelemetry {
+    id: string;
+    pincode: string;
+    stage: GeminiCallStage;
+    status: 'success' | 'error';
+    startedAt: string;
+    durationMs: number;
+    promptChars: number;
+    responseChars?: number;
+    errorMessage?: string;
+}
+
+const geminiTelemetry: GeminiCallTelemetry[] = [];
+
+const getPerfTime = () => (typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now());
+
+const createTelemetryId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+const pushTelemetry = (entry: GeminiCallTelemetry) => {
+    geminiTelemetry.push(entry);
+    const { stage, status, pincode, durationMs, promptChars, responseChars, errorMessage } = entry;
+    const metaParts = [`prompt ${promptChars}`];
+    if (typeof responseChars === 'number') {
+        metaParts.push(`response ${responseChars}`);
+    }
+    const baseMessage = `[Gemini][${stage}] ${status.toUpperCase()} for ${pincode} in ${durationMs.toFixed(1)}ms (${metaParts.join(', ')})`;
+    if (status === 'error') {
+        console.warn(`${baseMessage}${errorMessage ? ` :: ${errorMessage}` : ''}`);
+    } else {
+        console.info(baseMessage);
+    }
+};
+
+export const getGeminiTelemetry = () => geminiTelemetry.slice();
+
+export const clearGeminiTelemetry = () => {
+    geminiTelemetry.length = 0;
+};
+
+const runWithTelemetry = async <T>(
+    stage: GeminiCallStage,
+    pincode: string,
+    promptChars: number,
+    executor: () => Promise<T>,
+    getResponseChars?: (result: T) => number | undefined
+): Promise<T> => {
+    const startedAt = new Date().toISOString();
+    const startTime = getPerfTime();
+
+    try {
+        const result = await executor();
+        const durationMs = getPerfTime() - startTime;
+        const responseChars = getResponseChars ? getResponseChars(result) : undefined;
+
+        pushTelemetry({
+            id: createTelemetryId(),
+            pincode,
+            stage,
+            status: 'success',
+            startedAt,
+            durationMs,
+            promptChars,
+            responseChars,
+        });
+
+        return result;
+    } catch (error) {
+        const durationMs = getPerfTime() - startTime;
+        pushTelemetry({
+            id: createTelemetryId(),
+            pincode,
+            stage,
+            status: 'error',
+            startedAt,
+            durationMs,
+            promptChars,
+            errorMessage: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+    }
+};
+
+const getResponseTextLength = (payload: { text?: string } | undefined) =>
+    payload && typeof payload.text === 'string' ? payload.text.length : undefined;
+
 const responseSchema = {
     type: Type.ARRAY,
     items: {
@@ -18,7 +107,7 @@ const responseSchema = {
         },
         address: {
           type: Type.STRING,
-          description: "The complete mailing address of the center.",
+          description: "The complete mailing address of the center, including the 6-digit pincode.",
         },
         contactDetails: {
           type: Type.STRING,
@@ -44,36 +133,45 @@ const responseSchema = {
     },
 };
 
-export const findAndAnalyzeCTScans = async (pincode: string): Promise<ScanCenter[]> => {
+const createAddressFingerprint = (address: string): string => {
+    return address.toLowerCase().replace(/[^a-z0-9]/g, '');
+};
+
+export const findAndAnalyzeCTScans = async (pincode: string, existingResults: ScanCenter[] = []): Promise<ScanCenter[]> => {
   try {
-    // Step 1: Use grounding to find information about potential centers.
     const groundingPrompt = `
       Find diagnostic centers, imaging centers, or hospitals near pincode ${pincode}, India, that have a CT scanner. 
       For each one, gather detailed information from Google Search and Maps regarding the services they offer, paying close attention to any mention of "CT Scan", "Computed Tomography", or related imaging services. 
       Also, collect their name, address, and contact details.
     `;
 
-    const groundedResponse = await ai.models.generateContent({
-      model: "gemini-2.5-pro",
-      contents: groundingPrompt,
-      config: {
-        tools: [{ googleSearch: {} }, { googleMaps: {} }],
-      },
-    });
+    const groundedResponse = await runWithTelemetry(
+        'grounding',
+        pincode,
+        groundingPrompt.length,
+        () => ai.models.generateContent({
+            model: "gemini-2.5-pro",
+            contents: groundingPrompt,
+            config: {
+                tools: [{ googleSearch: {} }, { googleMaps: {} }],
+            },
+        }),
+        getResponseTextLength
+    );
 
-    const groundedText = groundedResponse.text.trim();
+    const groundedTextRaw = typeof groundedResponse.text === 'string' ? groundedResponse.text : '';
+    const groundedText = groundedTextRaw.trim();
     if (!groundedText) {
       console.log(`No initial information found for pincode ${pincode}.`);
       return [];
     }
 
-    // Step 2: Analyze the grounded text and extract confirmed CT scan centers into a structured JSON format.
     const extractionPrompt = `
       Analyze the following text which contains information about diagnostic centers. Based ONLY on this text, identify and extract details for centers that are definitively confirmed to have a CT (Computed Tomography) scanner.
       
       For each confirmed center, provide the following details:
       1.  **centerName**: The full name of the center.
-      2.  **address**: The complete address.
+      2.  **address**: The complete address, making sure to include the 6-digit pincode.
       3.  **contactDetails**: The primary phone number.
       4.  **doctorDetails**: A list of any doctor names mentioned.
       5.  **googleMapsLink**: A Google Maps search URL for the center's name and address (e.g., "https://www.google.com/maps/search/?api=1&query=Center+Name+Address").
@@ -87,24 +185,47 @@ export const findAndAnalyzeCTScans = async (pincode: string): Promise<ScanCenter
       ---
     `;
 
-    const extractionResponse = await ai.models.generateContent({
-        model: "gemini-2.5-pro",
-        contents: extractionPrompt,
-        config: {
-            responseMimeType: "application/json",
-            responseSchema: responseSchema,
-        },
-    });
+    const extractionResponse = await runWithTelemetry(
+        'extraction',
+        pincode,
+        extractionPrompt.length,
+        () => ai.models.generateContent({
+            model: "gemini-2.5-pro",
+            contents: extractionPrompt,
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: responseSchema,
+            },
+        }),
+        getResponseTextLength
+    );
 
-    const jsonText = extractionResponse.text.trim();
+    const jsonTextRaw = typeof extractionResponse.text === 'string' ? extractionResponse.text : '';
+    const jsonText = jsonTextRaw.trim();
     if (!jsonText) {
         return [];
     }
     
-    // Safely parse the JSON
     try {
-        const parsedResponse = JSON.parse(jsonText);
-        return parsedResponse as ScanCenter[];
+        const parsedResponse = JSON.parse(jsonText) as ScanCenter[];
+        
+        // --- Filtering Logic ---
+        const existingAddressFingerprints = new Set(existingResults.map(center => createAddressFingerprint(center.address)));
+
+        const filteredResults = parsedResponse.filter(newCenter => {
+            // Address de-duplication only; allow cross-pincode matches for now.
+            const newFingerprint = createAddressFingerprint(newCenter.address);
+            if (existingAddressFingerprints.has(newFingerprint)) {
+                console.log(`Dropping duplicate center "${newCenter.centerName}" based on address.`);
+                return false;
+            }
+            
+            existingAddressFingerprints.add(newFingerprint); // Add to set to de-dupe within the same API response
+            return true;
+        });
+
+        return filteredResults;
+
     } catch (parseError) {
         console.error(`Error parsing JSON response for pincode ${pincode}:`, parseError, "JSON Text:", jsonText);
         return [];
@@ -113,7 +234,6 @@ export const findAndAnalyzeCTScans = async (pincode: string): Promise<ScanCenter
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
     console.error(`Error discovering scans in pincode ${pincode}:`, errorMessage);
-    // Rethrow to be caught in the component
     throw new Error(errorMessage);
   }
 };

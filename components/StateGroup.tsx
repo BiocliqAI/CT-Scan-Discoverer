@@ -6,9 +6,10 @@ import { ChevronDownIcon, ChevronUpIcon } from './Icons';
 interface StateGroupProps {
   stateName: string;
   cities: CityData[];
+  onUpdateCity: (cityName: string, updater: (city: CityData) => CityData) => void;
 }
 
-const StateGroup: React.FC<StateGroupProps> = ({ stateName, cities }) => {
+const StateGroup: React.FC<StateGroupProps> = ({ stateName, cities, onUpdateCity }) => {
   const [isExpanded, setIsExpanded] = useState(true);
 
   return (
@@ -19,7 +20,7 @@ const StateGroup: React.FC<StateGroupProps> = ({ stateName, cities }) => {
       >
         <h2 className="text-2xl font-bold text-cyan-300">{stateName}</h2>
         <div className="flex items-center gap-4">
-          <span className="text-gray-400">{cities.length} {cities.length === 1 ? 'City' : 'Cities'}</span>
+          <span className="text-gray-400">{cities.length} {cities.length === 1 ? 'District' : 'Districts'}</span>
           <button className="p-1 text-gray-400 hover:text-white">
             {isExpanded ? <ChevronUpIcon /> : <ChevronDownIcon />}
           </button>
@@ -27,9 +28,13 @@ const StateGroup: React.FC<StateGroupProps> = ({ stateName, cities }) => {
       </header>
       {isExpanded && (
         <div className="p-4 border-t border-gray-700 animate-fade-in">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className="space-y-4">
             {cities.map((city) => (
-              <CityTile key={city.name} initialCityData={city} />
+              <CityTile
+                key={city.name}
+                cityData={city}
+                onUpdate={(updater) => onUpdateCity(city.name, updater)}
+              />
             ))}
           </div>
         </div>
