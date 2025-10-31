@@ -8,7 +8,8 @@ const STORAGE_KEY = 'ctScanDiscovererData';
 
 // Helper function to parse CSV text
 const parseCSV = (csvText: string): CityData[] => {
-  const lines = csvText.split('\n').map(line => line.trim()).filter(line => line);
+  const sanitizedText = csvText.replace(/^\uFEFF/, '');
+  const lines = sanitizedText.split(/\r?\n/).map(line => line.replace(/\uFEFF/g, '').trim()).filter(line => line);
   if (lines.length < 2) return [];
 
   const header = lines[0].split(',').map(h => h.trim().toLowerCase());
